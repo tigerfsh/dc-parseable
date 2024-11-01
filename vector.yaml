@@ -1,0 +1,95 @@
+api: 
+  enabled: true 
+
+timezone: "Asia/Shanghai"
+
+# sources:
+#   src_1_125:
+#     type: file
+#     data_dir: "//home/star/dc-parseable/data_dir"
+#     include:
+#       - /home/star/dc-parseable/**/*.log
+
+
+sources:
+  # generate_syslog:
+  #   type:   "demo_logs"
+  #   format: "syslog"
+  #   count:  100
+
+  src_1_125:
+    type: docker_logs
+    # auto_partial_merge: true
+    # docker_host: http://localhost:2375
+    # exclude_containers:
+    #   - exclude_
+    # host_key: host
+    include_containers:
+      - flog-
+    # include_images:
+    #   - httpd
+    # include_labels:
+    #   - org.opencontainers.image.vendor=Vector
+    # partial_event_marker_field: _partial
+    # retry_backoff_secs: 2
+
+transforms:
+  filter_json_str_log:
+    type: filter
+    inputs:
+      - src_1_125
+    condition:
+      type: "vrl"
+      source: |-
+         match(to_string!(.message), r'^\{') && match(to_string!(.message), r'\}$') 
+  
+  trans_to_json_log:
+    type: remap
+    drop_on_error: true
+    inputs:
+      - filter_json_str_log
+    # drop_on_abort: true
+    # file: ./my/program.vrl
+    metric_tag_values: single
+    source: |-
+      .C = parse_json!(.message)
+      del(.C.bytes)
+      del(.message)
+
+
+  filter_specific_log:
+    type: filter
+    inputs:
+      - trans_to_json_log
+    condition:
+      type: "vrl"
+      source: |-
+        .C.status == 200
+
+sinks:
+  parseable:
+    type: http
+    method: post
+    batch:
+      max_bytes: 10485760
+      max_events: 1000
+      timeout_secs: 10
+    compression: gzip
+    inputs: 
+      - filter_specific_log
+    encoding:
+      # json:
+      #   pretty: true
+      codec: json
+    uri: 'http://localhost:8001/api/v1/ingest'
+    auth:
+      strategy: basic
+      user: parseableadmin
+      password: parseableadmin
+    request:
+      headers:
+        X-P-Stream: vectordemo001
+    healthcheck:
+      enabled: true
+      path: 'http://localhost:8000/api/v1/liveness'
+      # port: 80
